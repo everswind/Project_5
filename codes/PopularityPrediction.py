@@ -48,8 +48,7 @@ def first_look(hashtag, plot=False):
     return data, result
 
 
-def extract_Xy(hashtag, feature_func):
-    data = feature_func(hashtag)[0]
+def extract_Xy(data):
     data_agg = data.groupby('hour', as_index=False).agg(
         {'followers': ['count', 'sum', 'max'],
          'citation': 'sum'})
@@ -66,18 +65,15 @@ def extract_Xy(hashtag, feature_func):
     return X, y
 
 
-def fit_OLS(hashtag_list, feature_func):
-    summary = []
-    for hashtag in hashtag_list:
-        X, y = extract_Xy(hashtag, feature_func)
-        X_c = sm.add_constant(X)
-        reg = sm.OLS(y, X_c)
-        est = reg.fit()
-        summary.append(dict(hashtag=hashtag,
-                            mse_total=est.mse_total,
-                            r_squared=est.rsquared,
-                            tvalues=dict(est.tvalues),
-                            pvalues=dict(est.pvalues)))
+def fit_OLS(X, y, hashtag):
+    X_c = sm.add_constant(X)
+    reg = sm.OLS(y, X_c)
+    est = reg.fit()
+    summary = [dict(hashtag=hashtag,
+                    mse_total=est.mse_total,
+                    r_squared=est.rsquared,
+                    tvalues=dict(est.tvalues),
+                    pvalues=dict(est.pvalues))]
     summary_df = pd.DataFrame(summary)
     # expand tvalues/pvalues into columns
     for column in ['tvalues', 'pvalues']:
@@ -105,19 +101,30 @@ def new_features(hashtag):
 
     # create hour column
     data['time'] = data['date'].apply(datetime.datetime.utcfromtimestamp)
-    data['hour'] = data['time'].apply(lambda t: t.replace(microsecond=0, second=0,
-                                                          minute=0))
-    span = data['hour'].max() - data['hour'].min()
-    tweet_per_hour = data.shape[0] / (span.days*24 + span.seconds/3600)
-    average_followers = data['followers'].mean()
-    average_retweets = data['citation'].mean()
 
-    result = {'hashtag': hashtag,
-              'average tweets per hour': tweet_per_hour,
-              'average followers per tweet': average_followers,
-              'average retweets per tweet': average_retweets}
+    pass
 
-    return data, result
+
+def split_periods(hashtag):
+    filename = 'data/tweets_#{}.txt'.format(hashtag)
+    date = []
+    n_followers = []
+    citation = []
+    with open(filename, 'r') as f:
+        for line in f:
+            tweet = json.loads(line)
+            date.append(tweet['citation_date'])
+            n_followers.append(tweet['author']['followers'])
+            citation.append(tweet['metrics']['citations']['total'])
+    data = pd.DataFrame({'date': date, 'followers': n_followers,
+                         'citation': citation})
+
+    # create hour column
+    data['time'] = data['date'].apply(datetime.datetime.utcfromtimestamp)
+    data['hour'] = data['time'].apply(
+        lambda t: t.replace(microsecond=0, second=0,
+                            minute=0))
+    pass
 
 
 def main():
@@ -132,7 +139,12 @@ def main():
     #%% Q3: linear regression
     hashtag_list = ['gohawks', 'gopatriots', 'patriots', 'sb49', 'nfl',
                     'superbowl']
-    summary_df = fit_OLS(hashtag_list, first_look)
+    summary = []
+    for hashtag in hashtag_list:
+        data = first_look(hashtag)[0]
+        X, y = extract_Xy(data)
+        summary.append(fit_OLS(X, y, hashtag))
+    summary_df = pd.concat(summary, axis=1, ignore_index=True)
 
     #%% Q4: design new features
 
