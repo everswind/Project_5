@@ -11,6 +11,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import KFold
+from sklearn import metrics
+from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing import StandardScaler
 
 
 def first_look(hashtag, plot=False):
@@ -145,6 +148,29 @@ def split_periods(hashtag):
                             minute=t.minute-(t.minute % 5)))
     return before_df, between_df, after_df
 
+
+def gridsearch_periods(reg, param_grid):
+    grid = GridSearchCV(reg, param_grid=param_grid,
+                        cv=KFold(5, shuffle=True, random_state=42),
+                        scoring='neg_mean_squared_error', n_jobs=-1)
+    summary = []
+    for i, period in enumerate(['before', 'between', 'after']):
+        data_agg = pd.read_csv('data/aggregated_data_{}.csv'.format(period))
+        data_agg['hour'] = pd.to_datetime(data_agg['hour'])
+        X, y = extract_Xy(data_agg)
+        grid.fit(X, y)
+        results = grid.cv_results_
+        results_df = pd.DataFrame(
+            {'_'.join(['mean_test_score', period]): -results['mean_test_score'],
+             '_'.join(['params', period]): results['params'],
+             '_'.join(['rank', period]): results['rank_test_score']
+             }).sort_values(by='_'.join(['rank', period])
+                            ).reset_index(drop=True)
+        summary.append(results_df)
+    summary_df = pd.concat(summary, axis=1)
+    return summary_df
+
+
 def main():
     #%% Q1-2: first look
     results = []
@@ -203,40 +229,68 @@ def main():
         summary.append(fit_OLS(X, y, 'aggregated_' + period))
     summary_df = pd.concat(summary, axis=1, ignore_index=True)
 
-    #%% Q8: grid search
+    #%% Q8: random forest, grid search
     param_grid = {'max_depth': [10, 20, 40, 60, 80, None],
                   'max_features': ['auto', 'sqrt'],
                   'min_samples_leaf': [1, 2, 4],
                   'min_samples_split': [2, 5, 10],
                   'n_estimators': [200, 400, 600, 800, 1000]}
-
-    #%% random forest
     reg = RandomForestRegressor()
-    grid = GridSearchCV(reg, param_grid=param_grid,
-                        cv=KFold(5, shuffle=True, random_state=42),
-                        scoring='neg_mean_squared_error', n_jobs=-1)
-    summary_rf = []
-    for i, period in enumerate(['before', 'between', 'after']):
-        data_agg = pd.read_csv('data/aggregated_data_{}.csv'.format(period))
-        data_agg['hour'] = pd.to_datetime(data_agg['hour'])
-        X, y = extract_Xy(data_agg)
-        grid.fit(X, y)
-        summary_rf.append(grid.cv_results_)
-    summary_before_rf, summary_between_rf, summary_after_rf = summary_rf
+    summary_df_rf = gridsearch_periods(reg, param_grid)
 
-    #%% Q9: gradient boosting
-    reg = GradientBoostingRegressor()
-    grid = GridSearchCV(reg, param_grid=param_grid,
-                        cv=KFold(5, shuffle=True, random_state=42),
-                        scoring='neg_mean_squared_error', n_jobs=-1)
-    summary_gb = []
+    #%% Q9: compare RF and OLS on entire agg dataset
+    data_agg_all = []
     for i, period in enumerate(['before', 'between', 'after']):
         data_agg = pd.read_csv('data/aggregated_data_{}.csv'.format(period))
         data_agg['hour'] = pd.to_datetime(data_agg['hour'])
-        X, y = extract_Xy(data_agg)
-        grid.fit(X, y)
-        summary_gb.append(grid.cv_results_)
-    summary_before_gb, summary_between_gb, summary_after_gb = summary_gb
+        data_agg_all.append(data_agg)
+    data_agg_all = pd.concat(data_agg_all, axis=0, ignore_index=True)
+    X, y = extract_Xy(data_agg_all)
+    rf = RandomForestRegressor(max_depth=80, max_features='sqrt',
+                               min_samples_leaf=4, min_samples_split=5,
+                               n_estimators=200)
+    rf.fit(X, y)
+    y_pred = rf.predict(X)
+    mse_rf = metrics.mean_squared_error(y, y_pred)
+    mse_OLS = fit_OLS(X, y, 'total').loc['mse_total', 0]
+    print('On entire aggregated data, random forest mse: {:.4f}'.format(mse_rf),
+          ',OLS mse: {:.4f}'.format(mse_OLS))
+
+    #%% Q10: gradient boosting, grid search
+    param_grid = {'max_depth': [10, 20, 40, 60, 80, None],
+                  'max_features': ['auto', 'sqrt'],
+                  'min_samples_leaf': [1, 2, 4],
+                  'min_samples_split': [2, 5, 10],
+                  'n_estimators': [200, 400, 600, 800, 1000]}
+    reg = GradientBoostingRegressor()
+    summary_df_gb = gridsearch_periods(reg, param_grid)
+
+    #%% Q11: MLPRegressor
+    X, y = extract_Xy(data_agg_all)
+    size_list = [(50,), (100,), (200,), (20, 10), (50, 10)]
+    mse_nn = {}
+    for size in size_list:
+        reg = MLPRegressor(hidden_layer_sizes=size)
+        reg.fit(X, y)
+        mse_nn.update(
+            {str(size): [metrics.mean_squared_error(y, reg.predict(X))]})
+    mse_nn_df = pd.DataFrame(mse_nn)
+
+    #%% Q12: standard scalar
+    scaler = StandardScaler()
+    X_scale = scaler.fit_transform(X)
+    reg = MLPRegressor(hidden_layer_sizes=(200,))
+    reg.fit(X_scale, y)
+    print(metrics.mean_squared_error(y, reg.predict(X_scale)))
+
+    #%% Q13: grid search for periods
+    param_grid = {'hidden_layer_sizes': size_list}
+    reg = MLPRegressor()
+    summary_df_nn = gridsearch_periods(reg, param_grid)
+
+    #%% Q14:
+
+
 
 
 
