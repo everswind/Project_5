@@ -1,0 +1,1 @@
+main() contains codes for 16 questions and can be run block by block.functions are all defined above main().
